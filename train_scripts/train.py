@@ -41,85 +41,85 @@ def set_fsdp_env():
     os.environ["FSDP_TRANSFORMER_CLS_TO_WRAP"] = 'PixArtBlock'
 
 
-@torch.inference_mode()
-def log_validation(model, step, device, vae=None):
-    torch.cuda.empty_cache()
-    model = accelerator.unwrap_model(model).eval()
-    hw = torch.tensor([[image_size, image_size]], dtype=torch.float, device=device).repeat(1, 1)
-    ar = torch.tensor([[1.]], device=device).repeat(1, 1)
-    null_y = torch.load(f'output/pretrained_models/null_embed_diffusers_{max_length}token.pth')
-    null_y = null_y['uncond_prompt_embeds'].to(device)
+# @torch.inference_mode()
+# def log_validation(model, step, device, vae=None):
+#     torch.cuda.empty_cache()
+#     model = accelerator.unwrap_model(model).eval()
+#     hw = torch.tensor([[image_size, image_size]], dtype=torch.float, device=device).repeat(1, 1)
+#     ar = torch.tensor([[1.]], device=device).repeat(1, 1)
+#     null_y = torch.load(f'output/pretrained_models/null_embed_diffusers_{max_length}token.pth')
+#     null_y = null_y['uncond_prompt_embeds'].to(device)
 
-    # Create sampling noise:
-    logger.info("Running validation... ")
-    image_logs = []
-    latents = []
+#     # Create sampling noise:
+#     logger.info("Running validation... ")
+#     image_logs = []
+#     latents = []
     
-    for prompt in validation_prompts:
-        if validation_noise is not None:
-            z = torch.clone(validation_noise).to(device)
-        else:
-            z = torch.randn(1, 4, latent_size, latent_size, device=device)
-        embed = torch.load(f'output/tmp/{prompt}_{max_length}token.pth', map_location='cpu')
-        caption_embs, emb_masks = embed['caption_embeds'].to(device), embed['emb_mask'].to(device)
-        # caption_embs = caption_embs[:, None]
-        # emb_masks = emb_masks[:, None]
-        model_kwargs = dict(data_info={'img_hw': hw, 'aspect_ratio': ar}, mask=emb_masks)
+#     for prompt in validation_prompts:
+#         if validation_noise is not None:
+#             z = torch.clone(validation_noise).to(device)
+#         else:
+#             z = torch.randn(1, 4, latent_size, latent_size, device=device)
+#         embed = torch.load(f'output/tmp/{prompt}_{max_length}token.pth', map_location='cpu')
+#         caption_embs, emb_masks = embed['caption_embeds'].to(device), embed['emb_mask'].to(device)
+#         # caption_embs = caption_embs[:, None]
+#         # emb_masks = emb_masks[:, None]
+#         model_kwargs = dict(data_info={'img_hw': hw, 'aspect_ratio': ar}, mask=emb_masks)
 
-        dpm_solver = DPMS(model.forward_with_dpmsolver,
-                          condition=caption_embs,
-                          uncondition=null_y,
-                          cfg_scale=4.5,
-                          model_kwargs=model_kwargs)
-        denoised = dpm_solver.sample(
-            z,
-            steps=14,
-            order=2,
-            skip_type="time_uniform",
-            method="multistep",
-        )
-        latents.append(denoised)
+#         dpm_solver = DPMS(model.forward_with_dpmsolver,
+#                           condition=caption_embs,
+#                           uncondition=null_y,
+#                           cfg_scale=4.5,
+#                           model_kwargs=model_kwargs)
+#         denoised = dpm_solver.sample(
+#             z,
+#             steps=14,
+#             order=2,
+#             skip_type="time_uniform",
+#             method="multistep",
+#         )
+#         latents.append(denoised)
 
-    torch.cuda.empty_cache()
-    if vae is None:
-        vae = AutoencoderKL.from_pretrained(config.vae_pretrained).to(accelerator.device).to(torch.float16)
-    for prompt, latent in zip(validation_prompts, latents):
-        latent = latent.to(torch.float16)
-        samples = vae.decode(latent.detach() / vae.config.scaling_factor).sample
-        samples = torch.clamp(127.5 * samples + 128.0, 0, 255).permute(0, 2, 3, 1).to("cpu", dtype=torch.uint8).numpy()[0]
-        image = Image.fromarray(samples)
-        image_logs.append({"validation_prompt": prompt, "images": [image]})
+#     torch.cuda.empty_cache()
+#     if vae is None:
+#         vae = AutoencoderKL.from_pretrained(config.vae_pretrained).to(accelerator.device).to(torch.float16)
+#     for prompt, latent in zip(validation_prompts, latents):
+#         latent = latent.to(torch.float16)
+#         samples = vae.decode(latent.detach() / vae.config.scaling_factor).sample
+#         samples = torch.clamp(127.5 * samples + 128.0, 0, 255).permute(0, 2, 3, 1).to("cpu", dtype=torch.uint8).numpy()[0]
+#         image = Image.fromarray(samples)
+#         image_logs.append({"validation_prompt": prompt, "images": [image]})
 
-    for tracker in accelerator.trackers:
-        if tracker.name == "tensorboard":
-            for log in image_logs:
-                images = log["images"]
-                validation_prompt = log["validation_prompt"]
-                formatted_images = []
-                for image in images:
-                    formatted_images.append(np.asarray(image))
+#     for tracker in accelerator.trackers:
+#         if tracker.name == "tensorboard":
+#             for log in image_logs:
+#                 images = log["images"]
+#                 validation_prompt = log["validation_prompt"]
+#                 formatted_images = []
+#                 for image in images:
+#                     formatted_images.append(np.asarray(image))
 
-                formatted_images = np.stack(formatted_images)
+#                 formatted_images = np.stack(formatted_images)
 
-                tracker.writer.add_images(validation_prompt, formatted_images, step, dataformats="NHWC")
-        elif tracker.name == "wandb":
-            import wandb
-            formatted_images = []
+#                 tracker.writer.add_images(validation_prompt, formatted_images, step, dataformats="NHWC")
+#         elif tracker.name == "wandb":
+#             import wandb
+#             formatted_images = []
 
-            for log in image_logs:
-                images = log["images"]
-                validation_prompt = log["validation_prompt"]
-                for image in images:
-                    image = wandb.Image(image, caption=validation_prompt)
-                    formatted_images.append(image)
+#             for log in image_logs:
+#                 images = log["images"]
+#                 validation_prompt = log["validation_prompt"]
+#                 for image in images:
+#                     image = wandb.Image(image, caption=validation_prompt)
+#                     formatted_images.append(image)
 
-            tracker.log({"validation": formatted_images})
-        else:
-            logger.warn(f"image logging not implemented for {tracker.name}")
+#             tracker.log({"validation": formatted_images})
+#         else:
+#             logger.warn(f"image logging not implemented for {tracker.name}")
 
-    del vae
-    flush()
-    return image_logs
+#     del vae
+#     flush()
+#     return image_logs
 
 
 def train():
@@ -225,10 +225,10 @@ def train():
                                     optimizer=optimizer,
                                     lr_scheduler=lr_scheduler
                                     )
-            if config.visualize and (global_step % config.eval_sampling_steps == 0 or (step + 1) == 1):
-                accelerator.wait_for_everyone()
-                if accelerator.is_main_process:
-                    log_validation(model, global_step, device=accelerator.device, vae=vae)
+            # if config.visualize and (global_step % config.eval_sampling_steps == 0 or (step + 1) == 1):
+            #     accelerator.wait_for_everyone()
+            #     if accelerator.is_main_process:
+            #         log_validation(model, global_step, device=accelerator.device, vae=vae)
 
         if epoch % config.save_model_epochs == 0 or epoch == config.num_epochs:
             accelerator.wait_for_everyone()
