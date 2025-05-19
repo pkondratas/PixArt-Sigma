@@ -44,7 +44,4 @@ for i in range(86):
 
     data_to_json.extend(add_objects(ds))
 
-    if i == 2:
-        break
-
 save_data(data_to_json)
