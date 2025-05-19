@@ -21,7 +21,7 @@ pe_interpolation = 1.0
 
 # training setting
 num_workers = 0
-train_batch_size = 1  # 48 as default
+train_batch_size = 48  # 48 as default
 num_epochs = 10  # 3
 gradient_accumulation_steps = 1
 grad_checkpointing = True
